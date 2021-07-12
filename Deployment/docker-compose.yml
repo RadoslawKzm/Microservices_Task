@@ -1,0 +1,213 @@
+version: '3.7'
+services:
+  postgres:
+    container_name: database
+    image: library/postgres
+    ports:
+      - 5432:5432
+    volumes:
+      - ../Database/postgres-data:/var/lib/postgresql/data
+    #    env_file:
+    #      - ./postgres_credentials.env
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=changeme
+      - POSTGRES_DB=db
+    restart: always
+
+  pg_admin:
+    container_name: db_admin_panel
+    image: dpage/pgadmin4
+    ports:
+      - 5050:80
+    env_file:
+      - ./pgadmin_credentials.env
+    restart: always
+    depends_on:
+      - postgres
+    logging:
+      driver: none
+
+  api_redis:
+    container_name: redis_input
+    image: redis
+    command: /bin/sh -c "redis-server"
+    ports:
+      - 6379:6379
+    restart: always
+
+  api_cache_proxy:
+    container_name: api_cache_proxy
+    build:
+      context: ../.
+      dockerfile: ./Deployment/Dockerfile
+      args:
+        APP_FOLDER: Service_cache_proxy
+        INSIDE_DOCKER_APP_FOLDER: App
+    entrypoint: /Service_cache_proxy/entrypoint.sh
+    ports:
+      - 8002:8000
+    depends_on:
+      - api_redis
+      - health_check
+    environment:
+      - HEALTH_CHECK_URL=http://health_check:8000
+      - CACHE_HOST=redis_input
+      - CACHE_PORT=6379
+      - CACHE_DB_NAME_1=0
+
+  api_updater:
+    container_name: api_updater
+    build:
+      context: ../.
+      dockerfile: ./Deployment/Dockerfile
+      args:
+        APP_FOLDER: Service_api_updater
+    entrypoint: /Service_api_updater/entrypoint.sh
+    ports:
+      - 8003:8000
+    depends_on:
+      - api_cache_proxy
+      - health_check
+    environment:
+      - HEALTH_CHECK_URL=http://health_check:8000
+      - COIN_DESK_URL=https://api.coindesk.com/v1/bpi/currentprice.json
+      - API_CACHE_PROXY_URL=http://api_cache_proxy:8000
+
+  create_buy_order:
+    container_name: create_buy_order
+    build:
+      context: ../.
+      dockerfile: ./Deployment/Dockerfile
+      args:
+        APP_FOLDER: Service_create_buy_order
+    entrypoint: /Service_create_buy_order/entrypoint.sh
+    ports:
+      - 8001:8000
+    environment:
+      - HEALTH_CHECK_URL=http://health_check:8000
+      - API_CACHE_PROXY_URL=http://api_cache_proxy:8000
+      - DB_CACHE_PROXY_URL=http://db_proxy:8000
+    depends_on:
+      - api_cache_proxy
+      - db_proxy
+      - health_check
+
+  health_check:
+    container_name: health_check
+    build:
+      context: ../.
+      dockerfile: ./Deployment/Dockerfile
+      args:
+        APP_FOLDER: Service_health_check
+    entrypoint: /Service_health_check/entrypoint.sh
+    ports:
+      - 8050:8000
+
+  db_proxy:
+    container_name: db_proxy
+    build:
+      context: ../.
+      dockerfile: ./Deployment/Dockerfile
+      args:
+        APP_FOLDER: Service_db_proxy
+    entrypoint: /Service_db_proxy/entrypoint.sh
+    ports:
+      - 8010:8000
+    environment:
+      - HEALTH_CHECK_URL=http://health_check:8000
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=changeme
+      - POSTGRES_DB=db
+      - POSTGRES_HOSTNAME=postgres:5432
+    depends_on:
+      - postgres
+      - health_check
+
+  fetch_buy_orders:
+    container_name: fetch_buy_orders
+    build:
+      context: ../.
+      dockerfile: ./Deployment/Dockerfile
+      args:
+        APP_FOLDER: Service_fetch_buy_orders
+    entrypoint: /Service_fetch_buy_orders/entrypoint.sh
+    ports:
+      - 8020:8000
+    environment:
+      - HEALTH_CHECK_URL=http://health_check:8000
+      - DB_CACHE_PROXY_URL=http://db_proxy:8000
+    depends_on:
+      - db_proxy
+      - health_check
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#  rabbit:
+#    image: rabbitmq:3-management-alpine
+#    container_name: rabbitmq
+#    ports:
+#      - 5672:5672
+#      - 15672:15672
+##    volumes:
+##      - ./rabbitmq-data/:/var/lib/rabbitmq/
+##      - ./rabbitmq-data/:/var/log/rabbitmq
+#  tests:
+#    container_name: tests
+#    build:
+#      context: ../.
+#      dockerfile: ./Deployment/Dockerfile
+#      args:
+#        APP_FOLDER: App
+#    entrypoint: /code/App/entrypoint_tests.sh
+#    volumes:
+#      - ../App:/code/App
+#
+#  locust:
+#    container_name: Locust-UI
+#    image: locustio/locust
+#    ports:
+#      - "8089:8089"
+#    volumes:
+#      - ./locust/:/mnt/locust
+#    command: -f /mnt/locust/locustfile.py --master -H http://app:8000
+#    depends_on:
+#      - app
+#      - redis
+#      - worker
+#
+#  worker:
+#    image: locustio/locust
+#    volumes:
+#      - ./locust/:/mnt/locust
+#    command: -f /mnt/locust/locustfile.py --worker --master-host locust
